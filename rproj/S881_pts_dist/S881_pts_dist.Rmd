@@ -1,0 +1,193 @@
+---
+title: "S881_pts_dist"
+author: "fk506cni"
+date: "2025-04-29"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+```{r}
+require(tidyverse)
+require(openxlsx)
+require(DT)
+require(tictoc)
+require(data.table)
+require(officer)
+require(lubridate)
+require(ggpubr)
+require(extrafont)
+require(gt)
+require(gtsummary)
+loadfonts(quiet = T)
+```
+
+
+```{r}
+outputdir <- "./figs/"
+if(!dir.exists(outputdir)){
+  dir.create(outputdir)
+}
+
+ggsave2_tri <- function(plot, wid = 9, hei=9){
+  plot_name <- deparse(substitute(plot))
+  
+  #png
+  file_name <- paste(outputdir,plot_name, ".png", sep = "",collapse = "")
+  ggsave(filename = file_name,plot = plot,device = "png",width = wid, height = hei,dpi = 300,units = "cm")
+  f2metajson(file_name)
+  
+  # #pdf
+  # file_name <- paste(outputdir,plot_name, ".pdf", sep = "",collapse = "")
+  # ggsave(filename = file_name,plot = plot,device = "pdf",width = wid, height = hei,dpi = 300,units = "cm")
+  # f2metajson(file_name)
+  
+  #pptx
+  file_name <- paste(outputdir,plot_name, ".pptx", sep = "",collapse = "")
+  plot_ed <- rvg::dml(ggobj = plot,width = wid, height = hei)
+  
+  doc <- read_pptx() %>%
+    add_slide('Title and Content', 'Office Theme') %>%
+    ph_with(value = "", location = ph_location_type(type = "title")) %>%
+    ph_with(value = plot_ed, location = ph_location(type = "body",width = cm2inch(wid), height = cm2inch(hei),left = 2, top = 2))
+  doc %>%
+    print(target = file_name)
+  f2metajson(file_name)
+  
+}
+
+
+
+inch2cm <- function(x){
+  return(x/0.39370)
+}
+cm2inch <- function(x){
+  return(0.39370*x)
+}
+
+p2cm <- function(x){
+  return(as.integer(0.008466666666666667 * x))
+}
+
+cm2p <- function(x){
+  return(as.integer(118.11023622047244 *x))
+}
+
+sv2ggkm <- function(svfit){
+  p <- ggsurvplot(fit = svfit, data = df,
+                risk.table.title = "risk.table.title", risk.table.y.text.col = TRUE,
+           risk.table.y.text = FALSE, fontsize = 5,
+           risk.table = TRUE, tables.theme = theme_pubr(), ggtheme = theme_pubr())
+  p_km <- p$plot
+  p_tb <- p$table
+  p2 <- cowplot::plot_grid(p_km, p_tb, ncol = 1,align = "v", rel_heights = c(3,1))
+  grid::grid.draw(p2)
+  return(p2)
+}
+
+
+f2metajson <- function(f){
+  l <- file.info(f) %>% as.list()
+  l2 <- list()
+  
+  l2 <- list()
+  l_names <- names(l)
+  
+  for (i in 1:length(l)){
+    if(l_names[i] %in% c("uid", "gid", "mode", "uname", "grname")){
+      # print(l_names[i])
+    }else{
+      if("POSIXct" %in% class(l[[i]])){
+        l2[[l_names[i]]] <- l[[i]] %>% 
+          lubridate::ymd_hms() %>% 
+          as.character()
+      }else{
+        l2[[l_names[i]]] <- as.character(l[[i]])
+      }
+    }
+  }
+  
+  l2$f <- f
+  l2$md5 <- f %>% 
+    file(.,open = "rb") %>% 
+    openssl::md5() %>% 
+    as.character() %>% 
+    as.character()
+  l2$sha256 <- f %>% 
+    file(.,open = "rb") %>% 
+    openssl::sha256() %>% 
+    as.character() %>% 
+    as.character()
+  print(l2)
+  f_json <- paste(f, ".json", sep="", collapse = "")
+  jsonlite::write_json(x = l2, path = f_json, pretty=T, auto_unbox=T)
+  # return(l2)
+  # # jsonlite::write_json(x = l2, path = f_json)
+}
+
+
+get_ts <- function(){
+  ts <- Sys.time() %>% 
+    as.character() %>% 
+    str_replace_all(" ", "_") %>% 
+    str_replace_all("\\-|:", "")
+  return(ts)
+}
+
+
+```
+
+
+
+```{r}
+ts <- get_ts()
+ts
+```
+
+
+```{r}
+f <-  "../../subjects/subjectslist.xlsx"
+df <- read.xlsx(f)
+
+df <- df %>% 
+  mutate(age = Age_dummy,
+         bw = BW_dummy,
+         bh = BH_dummy)
+```
+
+
+```{r}
+df %>% DT::datatable()
+```
+
+
+```{r}
+df %>% gt()
+```
+
+
+```{r}
+# theme_gtsummary_mean_sd()
+# theme_gtsummary_()
+reset_gtsummary_theme()
+t1 <- df %>%
+  mutate(BMI = bw/(bh^2)*1e+4) %>% 
+  select(Gender, age, bw,  bh, BMI, Study) %>%
+  tbl_summary(by=Study,
+              type = 
+                list(age ~ "continuous",
+                     bw ~ "continuous",
+                     bh ~ "continuous",
+                     BMI ~ "continuous"))
+
+t1 %>% as_gt() %>% as_latex() %>% as.character() %>% writeLines(con = "latex_out.tex")
+
+```
+
+
+```{r}
+sessionInfo()
+```
+

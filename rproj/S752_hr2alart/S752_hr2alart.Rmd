@@ -1,0 +1,394 @@
+---
+title: "S752_hr2alart"
+author: "fk506cni"
+date: "2025-03-16"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+
+
+```{r}
+require(tidyverse)
+require(openxlsx)
+require(DT)
+require(tictoc)
+require(data.table)
+require(officer)
+require(lubridate)
+require(ggpubr)
+require(gt)
+require(extrafont)
+require(arrow)
+require(svglite)
+require(lemon)
+loadfonts(quiet = T)
+```
+
+
+```{r}
+outputdir <- "./figs/"
+if(!dir.exists(outputdir)){
+  dir.create(outputdir)
+}
+
+ggsave2_tri <- function(plot, wid = 9, hei=9){
+  plot_name <- deparse(substitute(plot))
+  
+  #png
+  file_name <- paste(outputdir,plot_name, ".png", sep = "",collapse = "")
+  ggsave(filename = file_name,plot = plot,device = "png",width = wid, height = hei,dpi = 300,units = "cm")
+  f2metajson(file_name)
+  
+  # #pdf
+  # file_name <- paste(outputdir,plot_name, ".pdf", sep = "",collapse = "")
+  # ggsave(filename = file_name,plot = plot,device = "pdf",width = wid, height = hei,dpi = 300,units = "cm")
+  # f2metajson(file_name)
+  #svg
+  file_name <- paste(outputdir,plot_name, ".svg", sep = "",collapse = "")
+  ggsave(filename = file_name,plot = plot,device = "svg",width = wid, height = hei,dpi = 300,units = "cm")
+  
+  #pptx
+  file_name <- paste(outputdir,plot_name, ".pptx", sep = "",collapse = "")
+  plot_ed <- rvg::dml(ggobj = plot,width = wid, height = hei)
+  
+  doc <- read_pptx() %>%
+    add_slide('Title and Content', 'Office Theme') %>%
+    ph_with(value = "", location = ph_location_type(type = "title")) %>%
+    ph_with(value = plot_ed, location = ph_location(type = "body",width = cm2inch(wid), height = cm2inch(hei),left = 2, top = 2))
+  doc %>%
+    print(target = file_name)
+  # f2metajson(file_name)
+  
+  grid::grid.draw(plot)
+  
+}
+
+
+
+inch2cm <- function(x){
+  return(x/0.39370)
+}
+cm2inch <- function(x){
+  return(0.39370*x)
+}
+
+p2cm <- function(x){
+  return(as.integer(0.008466666666666667 * x))
+}
+
+cm2p <- function(x){
+  return(as.integer(118.11023622047244 *x))
+}
+
+sv2ggkm <- function(svfit){
+  p <- ggsurvplot(fit = svfit, data = df,
+                risk.table.title = "risk.table.title", risk.table.y.text.col = TRUE,
+           risk.table.y.text = FALSE, fontsize = 5,
+           risk.table = TRUE, tables.theme = theme_pubr(), ggtheme = theme_pubr())
+  p_km <- p$plot
+  p_tb <- p$table
+  p2 <- cowplot::plot_grid(p_km, p_tb, ncol = 1,align = "v", rel_heights = c(3,1))
+  grid::grid.draw(p2)
+  return(p2)
+}
+
+
+f2metajson <- function(f){
+  l <- file.info(f) %>% as.list()
+  l2 <- list()
+  
+  l2 <- list()
+  l_names <- names(l)
+  
+  for (i in 1:length(l)){
+    if(l_names[i] %in% c("uid", "gid", "mode", "uname", "grname")){
+      # print(l_names[i])
+    }else{
+      if("POSIXct" %in% class(l[[i]])){
+        l2[[l_names[i]]] <- l[[i]] %>% 
+          lubridate::ymd_hms() %>% 
+          as.character()
+      }else{
+        l2[[l_names[i]]] <- as.character(l[[i]])
+      }
+    }
+  }
+  
+  l2$f <- f
+  l2$md5 <- f %>% 
+    file(.,open = "rb") %>% 
+    openssl::md5() %>% 
+    as.character() %>% 
+    as.character()
+  l2$sha256 <- f %>% 
+    file(.,open = "rb") %>% 
+    openssl::sha256() %>% 
+    as.character() %>% 
+    as.character()
+  print(l2)
+  f_json <- paste(f, ".json", sep="", collapse = "")
+  jsonlite::write_json(x = l2, path = f_json, pretty=T, auto_unbox=T)
+  # return(l2)
+  # # jsonlite::write_json(x = l2, path = f_json)
+}
+
+
+get_ts <- function(){
+  ts <- Sys.time() %>% 
+    as.character() %>% 
+    str_replace_all(" ", "_") %>% 
+    str_replace_all("\\-|:", "")
+  return(ts)
+}
+
+
+```
+
+
+```{r}
+ts <- get_ts()
+ts
+```
+
+
+```{r}
+fs <- list.files("../../treadmill/", pattern = "subject*", full.names = T)
+fs
+
+# f_mt <- "../../treadmill/time_to_detect.xlsx"
+# mt_org <- openxlsx::read.xlsx(f_mt)
+# mt_org %>% DT::datatable()
+
+f_mt <- "../../treadmill/time_to_detect_refine.xlsx"
+mt_org <- openxlsx::read.xlsx(f_mt)
+mt_org %>% DT::datatable()
+```
+
+
+```{r}
+l <- list()
+for(f in fs){
+  print(f)
+  d <- openxlsx::read.xlsx(f) %>% 
+    mutate(f = f)
+  l[[f]] <- d
+  
+}
+
+hrs_org <- rbindlist(l, fill = T)
+
+hrs <- hrs_org %>% 
+  filter(!is.na(treadmill)) %>% 
+  select(-one_of(c("X5","左利き","裸足" ))) %>%
+  pivot_longer(cols = c( "watch(右、黒)", "watch(左、白)","watch(左、黒)", "watch(右、白)","treadmill")) %>% 
+  filter(!is.na(value)) %>% 
+  mutate(dev_ = name %>% 
+           str_extract("^[a-z]*"),
+         dit = name %>% 
+           str_remove("^[a-z]*")) %>% 
+  mutate(pos_ = dit %>% 
+           str_split_i( "、", 1), 
+         pos = case_when(
+             pos_=="(右" ~ "right arm",
+             pos_=="(左" ~ "left arm",
+             T ~ "chest"
+           )) %>% 
+  mutate(dev_2 = dit %>% 
+           str_split_i( "、", 2),
+         dev = case_when(
+             dev_2=="黒)" ~ "vivoactive 5",
+             dev_2=="白)" ~ "Venu Sq 2",
+             T ~ dev_
+           )) %>% 
+  mutate(case_number = f %>% 
+           str_sub(start = -6, end = -6) %>% 
+           str_c("Case:", ., sep = ""),
+         cond = str_c(case_number,
+                      dev,
+                      pos, sep="_")) %>% 
+  mutate(seconds = time %>%
+           as.numeric(.) * 86400)
+
+# hrs$time
+# hrs %>% colnames()
+```
+
+```{r}
+mt_org %>% colnames()
+
+mt <- mt_org %>% 
+  mutate(case_number = 
+           str_c("Case:", case, sep = ""),
+         seconds = 86400 * time) %>% 
+  rename(dev = cond)
+
+# mt_apr <- mt %>% 
+#   left_join(
+#     hrs %>% 
+#       select(case_number, seconds, pos, value) %>% 
+#       rename(devtime=seconds), by = c("case_number", "pos")
+#   ) %>% 
+#   mutate(subtime = seconds - devtime) %>% 
+#   mutate(ba = 0 <= subtime)
+#   group_by(case_number, pos,)
+
+rv <- c()
+for(i in 1:nrow(mt)){
+  r_i <- mt[i,]
+  # print(r_i$case)
+  df_i <- hrs %>% 
+    filter(case_number == r_i$case_number) %>% 
+    filter(pos == r_i$pos)
+  # print(df_i)
+  xs <- df_i$seconds
+  ys <- df_i$value
+  target_y <- approx(df_i$seconds, df_i$value, xout = r_i$seconds)$y
+  rv <- c(rv, target_y)
+}
+  
+
+mt[["apr_val"]] <- rv
+# cx <-  c("time.of.HR>=100", "X3", "time.of.detect.左", "X5", "time.of.detect.右", "X7", "time.of.detect.白",  "X9", "time.of.detect.黒", "X11", "終了時刻", "X13") 
+# mt <- mt_org %>% 
+#   filter(!is.na(X1))
+# 
+# for (ci in cx){
+#   # print(ci)
+#   mt[[ci]] <- mt[[ci]] %>% 
+#     as.numeric()
+#   if(str_detect(ci, "^X")){
+#     print(ci)
+#   }else{
+#     mt[[ci]] <- 60 *  mt[[ci]]
+#   }
+# }
+# mt <- mt %>% 
+#   mutate(time_over_100_ = `time.of.HR>=100` + X3) %>% 
+#   mutate(time_det_left_ = `time.of.detect.左` + X5, 
+#          time_det_right_ = `time.of.detect.右` + X7,
+#          time_det_white_ = `time.of.detect.白` + X9,
+#          time_det_black_ = `time.of.detect.黒` + X11) %>% 
+#   select(X1, dplyr::ends_with("_")) %>% 
+#   pivot_longer(cols = one_of(c("time_det_left_", "time_det_right_", 
+#                                "time_det_white_","time_det_black_")))
+# # %>% 
+# #   mutate(dev = case_when(
+# #     name == "time_over_100_" ~ "treadmill",
+# #     name == "time_det_white_" ~ "Venu Sq 2",
+# #     name == "time_det_black_" ~ "vivoactive 5",
+# #     T~ ""
+# #   ))  %>% 
+# #   mutate(pos = case_when(
+# #     name == "time_over_100_" ~ "chest",
+# #     name == "time_det_left_" ~ "left",
+# #     name == "time_det_right_" ~ "right",
+# #     T ~ ""
+# #   )) %>% 
+# #   mutate(case_number = X1 %>% 
+# #            str_sub(start = -1, end = -1) %>% 
+# #            str_c("Case:", ., sep = ""),
+# #          cond = str_c(case_number,
+# #                       dev,
+# #                       pos, sep="_"))
+# # 
+# 
+# mt %>% colnames()
+```
+
+
+"time.of.detect.左"
+[1] "X5"
+[1] "time.of.detect.右"
+[1] "X7"
+[1] "time.of.detect.白"
+[1] "X9"
+[1] "time.of.detect.黒"
+
+
+```{r}
+
+p_hr <- ggplot()+
+  theme_pubr(base_family = "Times New Roman")+geom_line(
+    data = hrs,
+    aes(x=seconds, 
+        y=value,group=cond,
+        color=dev)
+  )+
+  geom_point(
+    data=mt,
+    aes(x=seconds,
+        y=apr_val,
+        color=dev)
+  )+
+  facet_rep_grid(vars(case_number), scales = "free"
+                 , switch = "both", space = "free",
+                 repeat.tick.labels = T)+
+  # facet_wrap(~case_number,
+  #            ncol = 1, strip.position = "left", scales = "fixed",
+  #            repeat.tick.labels=TRUE)+
+  labs(color = "Device")+ylab("Heart Rate")
+# +
+#   coord_cartesian(expand = F, ylim = c(50, 180))
+p_hr
+
+ggsave2_tri(p_hr, wid = 18, hei = 18)
+```
+
+
+```{r}
+mt_tr <- mt %>% 
+  filter(dev == "treadmill") %>% 
+  rename(seconds_tr =  seconds)
+mt_wt <- mt %>% 
+  filter(dev != "treadmill") %>% 
+  rename(seconds_wt =  seconds,
+         pos_wt = pos,
+         dev_wt = dev)
+
+mt_sub <- mt_tr %>% 
+  left_join(mt_wt %>% 
+              select(case_number, 
+                     seconds_wt,
+                     pos_wt,
+                     dev_wt),
+            by="case_number") %>% 
+  mutate(time_to_alart = seconds_wt - seconds_tr)
+
+p_alart <- ggplot()+
+  theme_pubr(base_family = "Times New Roman")+
+  geom_point(data = mt_sub,
+             aes(x=dev_wt,
+                 y=time_to_alart))+
+  xlab("Device")+
+  ylab("Seconds")+coord_flip()
+p_alart
+
+ggsave2_tri(p_alart)
+```
+
+```{r}
+mt_sub$time_to_alart %>% mean()  
+mt_sub$time_to_alart %>% median()
+```
+
+```{r}
+# mt <- mt %>% 
+#   mutate(time_over_100_ = `time.of.HR>=100` + X3) %>% 
+#   mutate(time_det_left_ = `time.of.detect.左` + X5, 
+#          time_det_right_ = `time.of.detect.右` + X7,
+#          time_det_white_ = `time.of.detect.白` + X9,
+#          time_det_black_ = `time.of.detect.黒` + X11) %>% 
+#   select(X1, dplyr::ends_with("_")) %>% 
+#   pivot_longer(cols = one_of(c("time_over_100_",
+#                                "time_det_left_", "time_det_right_", 
+#                                "time_det_white_","time_det_black_"))) 
+```
+
+```{r}
+sessionInfo()
+```
+
